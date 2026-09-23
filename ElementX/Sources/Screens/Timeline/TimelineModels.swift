@@ -56,6 +56,8 @@ enum TimelineViewAction {
     case galleryItemTapped(GalleryItemID)
     case itemSendInfoTapped(itemID: TimelineItemIdentifier)
     case toggleReaction(key: String, itemID: TimelineItemIdentifier)
+    /// Sent by a reaction once it is laid out, so that a celebration can burst from it. A `nil` origin means it is hidden.
+    case celebrateReaction(origin: CGPoint?)
     case sendReadReceiptIfNeeded(TimelineItemIdentifier)
     case paginateBackwards
     case paginateForwards
@@ -165,7 +167,24 @@ struct TimelineViewState: BindableState {
     
     var stoppedLiveLocationIDs: Set<TimelineItemIdentifier> = []
     
+    /// The reaction the user has just added that should be celebrated once its pill is on screen.
+    var pendingCelebration: PendingCelebration?
+    
+    /// The celebration currently bursting in the timeline.
+    var celebration: Celebration?
+    
     var bindings: TimelineViewStateBindings
+    
+    struct PendingCelebration: Equatable {
+        let itemID: TimelineItemIdentifier
+        let key: String
+    }
+    
+    /// Identified so that repeating a celebration always counts as a new one.
+    struct Celebration: Equatable {
+        let id = UUID()
+        let origin: CGPoint
+    }
 }
 
 struct TimelineViewStateBindings {

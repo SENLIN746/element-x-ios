@@ -910,6 +910,111 @@ final class TimelineViewModelTests {
         #expect(userIndicatorController.submitIndicatorDelayReceivedArguments?.indicator.title == L10n.errorCameraUnavailable)
     }
     
+    // MARK: - Celebrations
+    
+    @Test
+    func celebrateAddedTadaReaction() async throws {
+        // Given a message the user hasn't reacted to.
+        let item = TextRoomTimelineItem(text: "Message", sender: "bob")
+        let viewModel = makeCelebrationViewModel(item: item)
+        
+        // When adding a tada reaction to it.
+        let deferred = deferFulfillment(viewModel.context.$viewState) { $0.pendingCelebration != nil }
+        viewModel.process(viewAction: .toggleReaction(key: "🎉", itemID: item.id))
+        try await deferred.fulfill()
+        
+        // Then the reaction is flagged for celebration and bursts once it reports its position.
+        #expect(viewModel.state.pendingCelebration?.itemID == item.id)
+        #expect(viewModel.state.pendingCelebration?.key == "🎉")
+        
+        viewModel.process(viewAction: .celebrateReaction(origin: CGPoint(x: 10, y: 20)))
+        
+        #expect(viewModel.state.pendingCelebration == nil)
+        #expect(viewModel.state.celebration?.origin == CGPoint(x: 10, y: 20))
+    }
+    
+    @Test
+    func skipCelebrationWhenDisabled() async throws {
+        let item = TextRoomTimelineItem(text: "Message", sender: "bob")
+        let viewModel = makeViewModel(timelineController: TimelineControllerMock(.init(timelineItems: [item])))
+        
+        // When adding a tada reaction without the feature flag.
+        let deferred = deferFailure(viewModel.context.$viewState, timeout: .seconds(1)) { $0.pendingCelebration != nil }
+        viewModel.process(viewAction: .toggleReaction(key: "🎉", itemID: item.id))
+        
+        // Then nothing is celebrated.
+        try await deferred.fulfill()
+    }
+    
+    @Test
+    func celebrateOnlyAddedTadaReactions() async throws {
+        // Given a message the user has already sent a tada reaction to.
+        let sender = "@bob:server.com"
+        let reactions = [AggregatedReaction(accountOwnerID: sender, key: "🎉", senders: [.init(id: sender, timestamp: .mock)])]
+        let item = TextRoomTimelineItem(id: .randomEvent,
+                                        timestamp: .mock,
+                                        isOutgoing: true,
+                                        isEditable: true,
+                                        canBeRepliedTo: true,
+                                        sender: .init(id: sender, displayName: "bob"),
+                                        content: .init(body: "Message"),
+                                        properties: RoomTimelineItemProperties(reactions: reactions))
+        let viewModel = makeCelebrationViewModel(item: item)
+        
+        // When removing that reaction, or adding a different one.
+        let deferred = deferFailure(viewModel.context.$viewState, timeout: .seconds(1)) { $0.pendingCelebration != nil }
+        viewModel.process(viewAction: .toggleReaction(key: "🎉", itemID: item.id))
+        viewModel.process(viewAction: .toggleReaction(key: "🦄", itemID: item.id))
+        
+        // Then nothing is celebrated.
+        try await deferred.fulfill()
+    }
+    
+    @Test
+    func discardUnshownPendingCelebration() async throws {
+        let item = TextRoomTimelineItem(text: "Message", sender: "bob")
+        let viewModel = makeCelebrationViewModel(item: item)
+        
+        // When adding a tada reaction that never reports its position.
+        var deferred = deferFulfillment(viewModel.context.$viewState) { $0.pendingCelebration != nil }
+        viewModel.process(viewAction: .toggleReaction(key: "🎉", itemID: item.id))
+        try await deferred.fulfill()
+        
+        // Then it stops waiting, so it won't burst whenever the pill is next shown.
+        deferred = deferFulfillment(viewModel.context.$viewState) { $0.pendingCelebration == nil }
+        try await deferred.fulfill()
+    }
+    
+    @Test
+    func celebrateTadaReactionAddedFromTheItemMenu() async throws {
+        let item = TextRoomTimelineItem(text: "Message", sender: "bob")
+        let viewModel = makeCelebrationViewModel(item: item)
+        
+        // When adding a tada reaction through the interaction handler.
+        let deferred = deferFulfillment(viewModel.context.$viewState) { $0.pendingCelebration != nil }
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: item.id, action: .toggleReaction(key: "🎉")))
+        try await deferred.fulfill()
+        
+        // Then it is flagged for celebration too.
+        #expect(viewModel.state.pendingCelebration?.itemID == item.id)
+    }
+    
+    @Test
+    func skipCelebrationOfHiddenReaction() async throws {
+        let item = TextRoomTimelineItem(text: "Message", sender: "bob")
+        let viewModel = makeCelebrationViewModel(item: item)
+        let deferred = deferFulfillment(viewModel.context.$viewState) { $0.pendingCelebration != nil }
+        viewModel.process(viewAction: .toggleReaction(key: "🎉", itemID: item.id))
+        try await deferred.fulfill()
+        
+        // When the reaction is collapsed away and reports no origin.
+        viewModel.process(viewAction: .celebrateReaction(origin: nil))
+        
+        // Then nothing bursts and the celebration isn't left pending.
+        #expect(viewModel.state.pendingCelebration == nil)
+        #expect(viewModel.state.celebration == nil)
+    }
+    
     // MARK: - Helpers
     
     private func makeViewModel(items: [RoomTimelineItemProtocol],
@@ -922,11 +1027,12 @@ final class TimelineViewModelTests {
                                focussedEventID: String? = nil,
                                timelineController: TimelineControllerProtocol,
                                userIndicatorController: UserIndicatorControllerProtocol = UserIndicatorControllerMock(),
-                               appMediator: AppMediatorProtocol = AppMediatorMock(.init())) -> TimelineViewModel {
+                               appMediator: AppMediatorProtocol = AppMediatorMock(.init()),
+                               userSettings: UserSettings = .mock()) -> TimelineViewModel {
         TimelineViewModel(roomProxy: roomProxy ?? JoinedRoomProxyMock(.init(name: "")),
                           focussedEventID: focussedEventID,
                           timelineController: timelineController,
-                          userSession: UserSessionMock(.init()),
+                          userSession: UserSessionMock(.init(userSettings: userSettings)),
                           mediaPlayerProvider: MediaPlayerProviderMock(),
                           userIndicatorController: userIndicatorController,
                           appMediator: appMediator,
@@ -934,6 +1040,12 @@ final class TimelineViewModelTests {
                           emojiProvider: EmojiProvider(userSettings: .mock()),
                           linkMetadataProvider: LinkMetadataProvider(),
                           timelineControllerFactory: TimelineControllerFactoryMock(.init()))
+    }
+    
+    private func makeCelebrationViewModel(item: RoomTimelineItemProtocol) -> TimelineViewModel {
+        let userSettings = UserSettings.mock()
+        userSettings.app.reactionCelebrationsEnabled = true
+        return makeViewModel(timelineController: TimelineControllerMock(.init(timelineItems: [item])), userSettings: userSettings)
     }
     
     /// Starts a selection the way the app does, by choosing Forward on the item.

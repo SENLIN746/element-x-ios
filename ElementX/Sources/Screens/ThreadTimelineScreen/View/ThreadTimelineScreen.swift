@@ -60,6 +60,10 @@ struct ThreadTimelineScreen: View {
                     }
                 }
             }
+            // Last, so that the confetti flies over the date badge and the composer too.
+            .particleEffect(timelineContext.viewState.celebration == nil ? nil : .confetti,
+                            origin: timelineContext.viewState.celebration?.origin,
+                            trigger: timelineContext.viewState.celebration?.id)
     }
     
     private var isMessageSelectionActive: Bool {

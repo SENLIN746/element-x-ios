@@ -50,6 +50,7 @@ struct TimelineReactionsView: View {
                 } showReactionSummary: { key in
                     context.send(viewAction: .displayReactionSummary(itemID: itemID, key: key))
                 }
+                .background { celebrationTrigger(for: reaction) }
                 .reactionLayoutItem(.reaction)
                 .environment(\.layoutDirection, layoutDirection)
             }
@@ -78,6 +79,31 @@ struct TimelineReactionsView: View {
     }
     
     // MARK: - Private
+    
+    /// Reports the reaction's position once it is on screen so that a celebration can burst from it.
+    @ViewBuilder
+    private func celebrationTrigger(for reaction: AggregatedReaction) -> some View {
+        // The unique ID survives the local echo being replaced by the remote one.
+        if reaction.isHighlighted,
+           let pendingCelebration = context.viewState.pendingCelebration,
+           pendingCelebration.itemID.uniqueID == itemID.uniqueID,
+           pendingCelebration.key == reaction.key {
+            GeometryReader { geometry in
+                let frame = geometry.frame(in: .global)
+                
+                Color.clear
+                    .task(id: frame) {
+                        // Lets the cell finish resizing and any sheet the reaction was picked from finish dismissing,
+                        // a frame change restarts the wait. ponytail: fixed delay, observe the presentation if it proves too short.
+                        guard await (try? Task.sleep(for: .milliseconds(500))) != nil else { return }
+                        
+                        // Collapsed reactions are placed far above the screen (x is mirrored in RTL, y isn't).
+                        let origin = frame.maxY < 0 ? nil : CGPoint(x: frame.midX, y: frame.midY)
+                        context.send(viewAction: .celebrateReaction(origin: origin))
+                    }
+            }
+        }
+    }
     
     private var isCollapsible: Bool {
         reactions.count > 5

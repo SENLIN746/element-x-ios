@@ -380,6 +380,10 @@ final nonisolated class AppSettings: @unchecked Sendable {
     @UserPreference(defaultValue: false)
     var jumpToReadMarkerEnabled: Bool
     
+    /// Bursts confetti when adding a 🎉 reaction in the timeline.
+    @UserPreference(defaultValue: false)
+    var reactionCelebrationsEnabled: Bool
+    
     @UserPreference(defaultValue: false)
     var linkNewDeviceEnabled: Bool
     

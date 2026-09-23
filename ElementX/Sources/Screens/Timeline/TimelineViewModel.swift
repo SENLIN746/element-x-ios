@@ -21,6 +21,9 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         static let focusTimelineToastIndicatorID = "RoomScreenFocusTimelineToastIndicator"
         static let toastErrorID = "RoomScreenToastError"
         static let selectionLimitIndicatorID = "RoomScreenSelectionLimitIndicator"
+        static let celebrationReactionKey = "🎉"
+        static let celebrationDuration = Duration.seconds(5)
+        static let pendingCelebrationTimeout = Duration.seconds(2)
     }
     
     private let roomProxy: JoinedRoomProxyProtocol
@@ -46,6 +49,8 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     
     private var paginateBackwardsTask: Task<Void, Never>?
     private var paginateForwardsTask: Task<Void, Never>?
+    @CancellableTask private var celebrationTask: Task<Void, Never>?
+    @CancellableTask private var pendingCelebrationTask: Task<Void, Never>?
     
     init(roomProxy: JoinedRoomProxyProtocol,
          focussedEventID: String? = nil,
@@ -165,12 +170,9 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
             handleItemSendInfoTapped(itemID: itemID)
         case .toggleReaction(let emoji, let itemID):
             emojiProvider.markEmojiAsFrequentlyUsed(emoji)
-            
-            guard case let .event(_, eventOrTransactionID) = itemID else {
-                fatalError()
-            }
-            
-            Task { await timelineController.toggleReaction(emoji, to: eventOrTransactionID) }
+            Task { await timelineInteractionHandler.toggleReaction(emoji, on: itemID) }
+        case .celebrateReaction(let origin):
+            celebrate(at: origin)
         case .sendReadReceiptIfNeeded(let lastVisibleItemID):
             Task { await sendReadReceiptIfNeeded(for: lastVisibleItemID) }
         case .paginateBackwards:
@@ -530,6 +532,8 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
                     displayErrorToast(title)
                 case .displayEmojiPicker(let selectedEmojis, let continuation):
                     actionsSubject.send(.displayEmojiPicker(selectedEmojis: selectedEmojis, continuation: continuation))
+                case .willAddReaction(let key, let itemID):
+                    prepareCelebration(of: key, on: itemID)
                 case .displayMessageForwarding(let itemID):
                     Task { await self.forwardMessage(itemID: itemID) }
                 case .displayEditPollForm(let eventID, let poll):
@@ -1191,6 +1195,42 @@ extension TimelineViewModel {
     private func forwardMessage(itemID: TimelineItemIdentifier) async {
         guard let forwardingPayload = await makeForwardingPayload(for: [itemID]) else { return }
         actionsSubject.send(.displayMessageForwarding(forwardingPayload: forwardingPayload))
+    }
+}
+
+// MARK: - Celebrations
+
+private extension TimelineViewModel {
+    func prepareCelebration(of key: String, on itemID: TimelineItemIdentifier) {
+        guard userSettings.app.reactionCelebrationsEnabled,
+              !UIAccessibility.isReduceMotionEnabled,
+              !ProcessInfo.processInfo.isLowPowerModeEnabled,
+              key == Constants.celebrationReactionKey else {
+            return
+        }
+        
+        state.pendingCelebration = .init(itemID: itemID, key: key)
+        
+        // Otherwise a reaction that never shows up on screen (failed to send, scrolled away)
+        // would burst whenever its pill is next displayed.
+        pendingCelebrationTask = Task {
+            guard await (try? Task.sleep(for: Constants.pendingCelebrationTimeout)) != nil else { return }
+            state.pendingCelebration = nil
+        }
+    }
+    
+    func celebrate(at origin: CGPoint?) {
+        state.pendingCelebration = nil
+        
+        guard let origin else { return }
+        
+        state.celebration = .init(origin: origin)
+        
+        // Cleared so that a rebuilt timeline doesn't burst again. A newer celebration cancels this one and owns the effect.
+        celebrationTask = Task {
+            guard await (try? Task.sleep(for: Constants.celebrationDuration)) != nil else { return }
+            state.celebration = nil
+        }
     }
 }
 
