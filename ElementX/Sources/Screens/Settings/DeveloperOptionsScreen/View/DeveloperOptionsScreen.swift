@@ -94,7 +94,7 @@ struct DeveloperOptionsScreen: View {
                 
                 Toggle(isOn: $context.reactionCelebrationsEnabled) {
                     Text("Reaction celebrations")
-                    Text("Bursts confetti when adding a 🎉 reaction.")
+                    Text("Bursts confetti for 🎉 reactions, yours and incoming ones.")
                 }
             }
             

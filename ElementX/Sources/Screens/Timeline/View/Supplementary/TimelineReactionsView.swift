@@ -84,8 +84,7 @@ struct TimelineReactionsView: View {
     @ViewBuilder
     private func celebrationTrigger(for reaction: AggregatedReaction) -> some View {
         // The unique ID survives the local echo being replaced by the remote one.
-        if reaction.isHighlighted,
-           let pendingCelebration = context.viewState.pendingCelebration,
+        if let pendingCelebration = context.viewState.pendingCelebration,
            pendingCelebration.itemID.uniqueID == itemID.uniqueID,
            pendingCelebration.key == reaction.key {
             GeometryReader { geometry in

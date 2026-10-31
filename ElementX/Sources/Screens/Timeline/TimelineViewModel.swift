@@ -50,6 +50,10 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     private var paginateBackwardsTask: Task<Void, Never>?
     private var paginateForwardsTask: Task<Void, Never>?
     @CancellableTask private var celebrationTask: Task<Void, Never>?
+    /// Reactions received before the timeline was opened are history, they're never celebrated.
+    private let celebrationsStartDate = Date()
+    /// Every incoming reaction is celebrated once, however often its item is updated or scrolled back into view.
+    private var celebratedReactions: Set<ReactionSender> = []
     @CancellableTask private var pendingCelebrationTask: Task<Void, Never>?
     
     init(roomProxy: JoinedRoomProxyProtocol,
@@ -475,6 +479,7 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
                 case .updatedTimelineItems(let updatedItems, let isSwitchingTimelines):
                     buildTimelineViews(timelineItems: updatedItems, isSwitchingTimelines: isSwitchingTimelines)
                     reconcileSelection(with: updatedItems, isSwitchingTimelines: isSwitchingTimelines)
+                    celebrateIncomingReactions(in: updatedItems)
                     
                     if !updatedItems.isEmpty {
                         analyticsService.signpost.finishTransaction(.openRoom)
@@ -1201,6 +1206,20 @@ extension TimelineViewModel {
 // MARK: - Celebrations
 
 private extension TimelineViewModel {
+    func celebrateIncomingReactions(in timelineItems: [RoomTimelineItemProtocol]) {
+        guard userSettings.app.reactionCelebrationsEnabled else { return }
+        
+        for case let item as EventBasedTimelineItemProtocol in timelineItems {
+            for reaction in item.properties.reactions where reaction.key == Constants.celebrationReactionKey {
+                for sender in reaction.senders where sender.id != roomProxy.ownUserID && sender.timestamp > celebrationsStartDate {
+                    if celebratedReactions.insert(sender).inserted {
+                        prepareCelebration(of: reaction.key, on: item.id)
+                    }
+                }
+            }
+        }
+    }
+    
     func prepareCelebration(of key: String, on itemID: TimelineItemIdentifier) {
         guard userSettings.app.reactionCelebrationsEnabled,
               !UIAccessibility.isReduceMotionEnabled,

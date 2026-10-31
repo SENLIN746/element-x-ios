@@ -1015,6 +1015,45 @@ final class TimelineViewModelTests {
         #expect(viewModel.state.celebration == nil)
     }
     
+    @Test
+    func celebrateIncomingTadaReactionOnce() async throws {
+        let item = TextRoomTimelineItem(text: "Message", sender: "alice")
+        let timelineController = TimelineControllerMock(.init(timelineItems: [item]))
+        let viewModel = makeCelebrationViewModel(item: item, timelineController: timelineController)
+        let reactedItem = item.reacted(by: "@charlie:server.com", at: .now)
+        
+        // When someone else reacts with a tada.
+        let deferred = deferFulfillment(viewModel.context.$viewState) { $0.pendingCelebration != nil }
+        timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [reactedItem], isSwitchingTimelines: false))
+        try await deferred.fulfill()
+        
+        // Then it is celebrated.
+        #expect(viewModel.state.pendingCelebration?.itemID == item.id)
+        viewModel.process(viewAction: .celebrateReaction(origin: CGPoint(x: 10, y: 20)))
+        
+        // But not again when the item is updated or scrolled back into view.
+        let deferredFailure = deferFailure(viewModel.context.$viewState, timeout: .seconds(1)) { $0.pendingCelebration != nil }
+        timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [reactedItem], isSwitchingTimelines: false))
+        try await deferredFailure.fulfill()
+    }
+    
+    @Test
+    func skipCelebrationOfHistoricAndOwnReactions() async throws {
+        let item = TextRoomTimelineItem(text: "Message", sender: "alice")
+        let otherItem = TextRoomTimelineItem(text: "Other message", sender: "alice")
+        let timelineController = TimelineControllerMock(.init(timelineItems: [item, otherItem]))
+        let viewModel = makeCelebrationViewModel(item: item, timelineController: timelineController)
+        
+        // When loading a tada sent before the timeline was opened and one sent by the user.
+        let deferred = deferFailure(viewModel.context.$viewState, timeout: .seconds(1)) { $0.pendingCelebration != nil }
+        timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [item.reacted(by: "@charlie:server.com", at: .distantPast),
+                                                                                otherItem.reacted(by: RoomMemberProxyMock.mockMe.userID, at: .now)],
+                                                                isSwitchingTimelines: false))
+        
+        // Then neither is celebrated, the user's own reactions are celebrated when they add them.
+        try await deferred.fulfill()
+    }
+    
     // MARK: - Helpers
     
     private func makeViewModel(items: [RoomTimelineItemProtocol],
@@ -1042,10 +1081,10 @@ final class TimelineViewModelTests {
                           timelineControllerFactory: TimelineControllerFactoryMock(.init()))
     }
     
-    private func makeCelebrationViewModel(item: RoomTimelineItemProtocol) -> TimelineViewModel {
+    private func makeCelebrationViewModel(item: RoomTimelineItemProtocol, timelineController: TimelineControllerMock? = nil) -> TimelineViewModel {
         let userSettings = UserSettings.mock()
         userSettings.app.reactionCelebrationsEnabled = true
-        return makeViewModel(timelineController: TimelineControllerMock(.init(timelineItems: [item])), userSettings: userSettings)
+        return makeViewModel(timelineController: timelineController ?? TimelineControllerMock(.init(timelineItems: [item])), userSettings: userSettings)
     }
     
     /// Starts a selection the way the app does, by choosing Forward on the item.
@@ -1065,6 +1104,12 @@ private extension TextRoomTimelineItem {
                   sender: .init(id: "@\(sender):server.com", displayName: sender),
                   content: .init(body: text),
                   properties: RoomTimelineItemProperties(reactions: reactions, orderedReadReceipts: addReadReceipts))
+    }
+    
+    func reacted(by senderID: String, at timestamp: Date) -> TextRoomTimelineItem {
+        var item = self
+        item.properties.reactions = [AggregatedReaction(accountOwnerID: "bob", key: "🎉", senders: [ReactionSender(id: senderID, timestamp: timestamp)])]
+        return item
     }
 }
 
